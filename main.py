@@ -5,6 +5,7 @@ from tqdm import tqdm
 import yaml
 
 from model.resnet50 import CB
+from model.cbm_resnet import CB_Resnet50
 import tensorboardX as tx
 
 import torch
@@ -39,11 +40,12 @@ def makeargs():
     parse.add_argument('--maad_path',type=str,default='/media/lijia/系统/data/vggface2/MAAD_Face.csv')
     parse.add_argument('--save_path',type=str,default='/home/lijia/codes/202210/cbw-face/checkpoints')
     parse.add_argument('--train_csv',type=str,default='train_id.csv')
-    parse.add_argument('--train_mode',choices=['independent','sequential','joint','standard'])
+    parse.add_argument('--train_mode',choices=['independent','sequential','joint','standard','freeze'],default='freeze')
     parse.add_argument('--batch_size',type=int,default=32)
     parse.add_argument('-lr',type=float,default=0.01)
     parse.add_argument('--epoch',type=int,default=20)
     parse.add_argument('--idclass',type=int,default=8631)
+    parse.add_argument('--state_dict_path',type=str,default='checkpoints/resnet50_face.pth.tar')
     args=parse.parse_args()
     return args
 
@@ -72,19 +74,28 @@ def main():
     # 加载
     args=makeargs()
     device='cuda' if torch.cuda.is_available() else 'cpu'
-    writer=tx.SummaryWriter('/home/lijia/codes/202210/cbw-face/log')
+    writer=tx.SummaryWriter('/home/lijia/codes/202210/cbw-face/runs')
 
     # 读取数据
     train_dl,test_dl=loadimage(args)
 
     #读取模型
-    model=CB(len(target_attributions),args.idclass)
-    model.load_state_dict(torch.load('/home/lijia/codes/202210/cbw-face/checkpoints/0_fc.pth.tar')['state_dict'])
-    optimizer=torch.optim.SGD(model.parameters(),args.lr,momentum=0.9)
+    if args.mode=='freeze':
+        model=CB_Resnet50(len(target_attributions),args.idclass)
+        model.load_state_dict(torch.load(args.state_dict_path)['state_dict'], False)
+        for name, para in model.named_parameters():
+            if 'model1' in name:
+                para.requires_grad = False
+        optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), args.lr, momentum=0.9)
+    else:
+        model=CB(len(target_attributions),args.idclass)
+        model.load_state_dict(torch.load(args.state_dict_path)['state_dict'])
+        optimizer=torch.optim.SGD(model.parameters(),args.lr,momentum=0.9)
     bce=nn.BCELoss()
     cel=nn.CrossEntropyLoss()
     weight=1
     model.to(device)
+
 
     bs=0
     for e in range(args.epoch):
@@ -116,5 +127,6 @@ def main():
             corr+=(d[2].to(device)==label).sum()
         print(float(corr)/float(total))
         writer.add_scalar('acc/test',float(corr)/float(total),e)
+
 
 main()
